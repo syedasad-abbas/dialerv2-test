@@ -944,7 +944,7 @@ async function routeCallToAgentWithRetry(uuid, direction) {
     transitionCallState(uuid, call, S.TRANSFERRING, 'agent-retry-attempt', { attempt });
 
     // Bridge with ring timeout and continue_on_fail (critical for retry)
-    const dialString = `{originate_timeout=${config.agent.ringTimeoutSec},continue_on_fail=true,hangup_after_bridge=true,call_role=agent_leg,cc_member_uuid=${uuid}}user/${agent.extension}@${config.freeswitch.sipDomain}`;
+    const dialString = `{originate_timeout=${config.agent.ringTimeoutSec},continue_on_fail=true,hangup_after_bridge=true,call_role=agent_leg,cc_member_uuid=${uuid}}sofia/internal/${agent.extension}%${config.freeswitch.sipDomain}`;
 
     log.info(`Attempting to ring agent ${agentId} (${agent.extension}) on ${uuid}`, {
       attempt,

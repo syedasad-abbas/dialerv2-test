@@ -5,7 +5,7 @@ const trace = () =>
   `api-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:3000",
+  baseURL: import.meta.env.VITE_API_BASE_URL || "",
   timeout: 15000,
 });
 

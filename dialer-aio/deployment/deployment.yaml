@@ -7,6 +7,8 @@ metadata:
     app: dialer-freeswitch
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: dialer-freeswitch
@@ -38,8 +40,18 @@ spec:
               value: "guest"
 
         - name: dialer-aio
-          image: syedasadabbas/dialerv2-app:0.6
+          image: syedasadabbas/dialerv2-app:0.7
           imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -eu
+              if [ -f /app/index.js ]; then
+                sed -i 's|}user/${agent.extension}@${config.freeswitch.sipDomain}|}sofia/internal/${agent.extension}%${config.freeswitch.sipDomain}|g' /app/index.js || true
+                sed -i 's|}sofia/internal/${agent.extension}@${config.freeswitch.sipDomain}|}sofia/internal/${agent.extension}%${config.freeswitch.sipDomain}|g' /app/index.js || true
+                sed -i 's|}sofia/internal/${agent.extension}%${config.freeswitch.sipDomain}%${config.freeswitch.sipDomain}|}sofia/internal/${agent.extension}%${config.freeswitch.sipDomain}|g' /app/index.js || true
+              fi
+              exec node /app/index.js
           ports:
             - name: health
               containerPort: 3000
@@ -273,6 +285,12 @@ spec:
         - name: frontend
           image: syedasadabbas/dialerv2-frontend:13.0
           imagePullPolicy: IfNotPresent
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          command: ["/bin/sh", "/opt/frontend-entrypoint.sh"]
           ports:
             - name: frontend-http
               containerPort: 8088
@@ -289,6 +307,11 @@ spec:
               port: 8088
             initialDelaySeconds: 15
             periodSeconds: 20
+          volumeMounts:
+            - name: frontend-entrypoint
+              mountPath: /opt/frontend-entrypoint.sh
+              subPath: entrypoint.sh
+              readOnly: true
 
         - name: auth-api
           image: syedasadabbas/dialerv2-auth-api:0.1
@@ -332,6 +355,7 @@ spec:
               port: 3100
             initialDelaySeconds: 15
             periodSeconds: 20
+          
 
         - name: freeswitch
           image: syedasadabbas/dialerv2-fs:0.3
@@ -422,6 +446,10 @@ spec:
         - name: entrypoint-script
           configMap:
             name: fs-entrypoint-config
+            defaultMode: 0755
+        - name: frontend-entrypoint
+          configMap:
+            name: frontend-entrypoint-config
             defaultMode: 0755
         - name: tls-certs
           secret:
