@@ -40,7 +40,7 @@ spec:
               value: "guest"
 
         - name: dialer-aio
-          image: syedasadabbas/dialerv2-app:0.8
+          image: syedasadabbas/dialerv2-app:0.9
           imagePullPolicy: IfNotPresent
           command: ["node", "/app/index.js"]
           ports:
@@ -69,7 +69,7 @@ spec:
             - name: SIP_PROFILE
               value: "external"
             - name: CODEC_STRING
-              value: "PCMU,PCMA"
+              value: "OPUS,PCMU,PCMA"
             - name: ORIGINATE_TIMEOUT_SEC
               value: "60"
             - name: ESL_RECONNECT_MS

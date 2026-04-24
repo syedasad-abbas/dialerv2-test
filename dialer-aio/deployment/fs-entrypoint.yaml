@@ -53,6 +53,14 @@ data:
     fi
     /bin/sed -i "s|replace_with_actual_ip|${PUBLIC_IP}|g" /usr/local/freeswitch/conf/vars.xml
 
+    # WebRTC agents commonly provide private/LAN ICE candidates.
+    # Without apply-candidate-acl, Sofia defaults to wan.auto and may reject them,
+    # causing immediate BYE with INCOMPATIBLE_DESTINATION after 200 OK.
+    INTERNAL_PROFILE="/usr/local/freeswitch/conf/sip_profiles/internal.xml"
+    if [ -f "${INTERNAL_PROFILE}" ] && ! grep -q 'apply-candidate-acl' "${INTERNAL_PROFILE}"; then
+      /bin/sed -i '/<param name="local-network-acl" value="localnet.auto"\/>/a\    <param name="apply-candidate-acl" value="localnet.auto"/>' "${INTERNAL_PROFILE}"
+    fi
+
     # Execute the original entrypoint command
     /usr/local/freeswitch/bin/freeswitch -nonat
 
