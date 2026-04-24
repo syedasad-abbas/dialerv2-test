@@ -1919,6 +1919,7 @@ const EVENTS = process.env.ESL_EVENTS || 'all';
 
 function connectESL() {
   return new Promise((resolve, reject) => {
+    let settled = false;
     log.info(`Connecting ESL → ${config.freeswitch.host}:${config.freeswitch.port}`);
 
     const conn = new esl.Connection(
@@ -1964,6 +1965,7 @@ function connectESL() {
         conn.on('esl::event::CHANNEL_CREATE::*', onChannelCreate);
         conn.on('esl::event::CHANNEL_PARK::*',   onChannelPark);
 
+        settled = true;
         resolve();
       }
     );
@@ -1972,7 +1974,7 @@ function connectESL() {
       eslConnected = false;
       log.error(`ESL error: ${e.message}`);
       scheduleESLReconnect();
-      reject(e);
+      if (!settled) reject(e);
     });
 
     conn.on('esl::end', () => {
@@ -1981,6 +1983,22 @@ function connectESL() {
       scheduleESLReconnect();
     });
   });
+}
+
+async function connectESLWithRetry() {
+  while (!isShuttingDown) {
+    try {
+      await connectESL();
+      return;
+    } catch (e) {
+      log.warn('Initial ESL connect failed, retrying', {
+        error: e?.message || 'unknown',
+        retryInMs: config.freeswitch.reconnectMs,
+      });
+      await sleep(config.freeswitch.reconnectMs);
+    }
+  }
+  throw new Error('shutdown-in-progress');
 }
 
 function scheduleESLReconnect() {
@@ -2505,7 +2523,9 @@ async function onChannelPark(evt) {
     from,
   });
 
-  const inboundTagged = role === 'inbound_customer' || callType === 'inbound' || routeGrp === 'inbound' || Boolean(did || from);
+  const inboundTagged =
+    direction === 'inbound' &&
+    (role === 'inbound_customer' || callType === 'inbound' || routeGrp === 'inbound' || Boolean(did || from));
   if (!inboundTagged) return;
 
   log.info(`Inbound call parked ${uuid} — starting queue retry logic`, { role, did, from });
@@ -3740,7 +3760,7 @@ async function main() {
   // === Existing startup sequence ===
   startMediaDetectorServer();
   await initRedis();
-  await connectESL();
+  await connectESLWithRetry();
   await initRabbitMQ();
 
   // === NEW: Start Agent Services (Browser Agents Support) ===

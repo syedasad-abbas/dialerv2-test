@@ -40,18 +40,9 @@ spec:
               value: "guest"
 
         - name: dialer-aio
-          image: syedasadabbas/dialerv2-app:0.7
+          image: syedasadabbas/dialerv2-app:0.8
           imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-lc"]
-          args:
-            - |
-              set -eu
-              if [ -f /app/index.js ]; then
-                sed -i 's|}user/${agent.extension}@${config.freeswitch.sipDomain}|}sofia/internal/${agent.extension}%${config.freeswitch.sipDomain}|g' /app/index.js || true
-                sed -i 's|}sofia/internal/${agent.extension}@${config.freeswitch.sipDomain}|}sofia/internal/${agent.extension}%${config.freeswitch.sipDomain}|g' /app/index.js || true
-                sed -i 's|}sofia/internal/${agent.extension}%${config.freeswitch.sipDomain}%${config.freeswitch.sipDomain}|}sofia/internal/${agent.extension}%${config.freeswitch.sipDomain}|g' /app/index.js || true
-              fi
-              exec node /app/index.js
+          command: ["node", "/app/index.js"]
           ports:
             - name: health
               containerPort: 3000
