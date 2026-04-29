@@ -97,7 +97,7 @@ fs_cli -x "sofia status"
 ### Verify
 ```bash
 # app logs should show attempts and cooldown
-kubectl logs -n dialerv2 deploy/dialer-freeswitch -c dialer-aio --tail=200 | grep -E "Attempting to ring agent|cooldown|All .* attempts failed"
+kubectl logs -n dialerv2test deploy/dialer-freeswitch -c dialer-aio --tail=200 | grep -E "Attempting to ring agent|cooldown|All .* attempts failed"
 ```
 
 ---
@@ -136,7 +136,7 @@ redis-cli HGETALL callroute:<customer_uuid>
 
 ### Verify
 ```bash
-kubectl logs -n dialerv2 deploy/dialer-freeswitch -c dialer-aio --tail=300 | grep -E "Inbound call parked|queue retry|queue timeout|successfully routed"
+kubectl logs -n dialerv2test deploy/dialer-freeswitch -c dialer-aio --tail=300 | grep -E "Inbound call parked|queue retry|queue timeout|successfully routed"
 ```
 
 ---
@@ -155,7 +155,7 @@ kubectl logs -n dialerv2 deploy/dialer-freeswitch -c dialer-aio --tail=300 | gre
 
 ### Verify
 ```bash
-kubectl logs -n dialerv2 deploy/dialer-freeswitch -c dialer-aio --tail=300 | grep -E "channel created|Agent leg created|Answered .* role|Agent leg hangup"
+kubectl logs -n dialerv2test deploy/dialer-freeswitch -c dialer-aio --tail=300 | grep -E "channel created|Agent leg created|Answered .* role|Agent leg hangup"
 ```
 
 ---
@@ -176,8 +176,77 @@ kubectl logs -n dialerv2 deploy/dialer-freeswitch -c dialer-aio --tail=300 | gre
 ```bash
 redis-cli KEYS "assign_lock:*"
 redis-cli KEYS "lock:agent:*"
-kubectl logs -n dialerv2 deploy/dialer-freeswitch -c dialer-aio --tail=300 | grep -E "assign_lock|already being assigned|customer already hung up"
+kubectl logs -n dialerv2test deploy/dialer-freeswitch -c dialer-aio --tail=300 | grep -E "assign_lock|already being assigned|customer already hung up"
 ```
+
+---
+
+## Step 9 — ESL stability and duplicate-event prevention
+
+### Problem observed
+- During startup race windows, ESL initial connect failure could trigger both retry loop and scheduled reconnect.
+- Result: duplicate ESL sessions and duplicate call event handling (`CHANNEL_PARK`, `answer`, `playback` appearing twice).
+
+### Files
+- `dialer-aio/index.js`
+  - `connectESL()` error handler updated so pre-connect failure rejects immediately without scheduling extra reconnect timer.
+  - reconnect scheduling now applies only after a successful connection lifecycle has started.
+
+### Verify
+```bash
+kubectl -n dialerv2test logs deploy/dialer-freeswitch -c dialer-aio --since=5m | grep -E "Connecting ESL|FreeSWITCH ESL connected|Subscribed to FS events"
+```
+- Expected: one active connect/subscription path after startup (no duplicate event streams).
+
+---
+
+## Step 10 — WebRTC media candidate ACL fix (critical production issue)
+
+### Root cause observed
+- Browser answered (`200 OK`) but FreeSWITCH immediately sent `BYE`.
+- Logs showed:
+  - `NO candidate ACL defined, Defaulting to wan.auto`
+  - hangup cause `INCOMPATIBLE_DESTINATION`
+- Browser SDP contained private/local ICE candidates; without candidate ACL, these were rejected.
+
+### Files
+- `dialer-aio/deployment/fs-entrypoint.yaml`
+  - startup script now injects:
+    - `<param name="apply-candidate-acl" value="localnet.auto"/>`
+  - injection is idempotent and applied before FreeSWITCH boot.
+- `dialer-aio/deployment/deployment.yaml`
+  - `CODEC_STRING` now set to `OPUS,PCMU,PCMA` for WebRTC-safe bridging.
+
+### Why this matters
+- Accepts local/private ICE candidates for browser agents.
+- Prevents post-answer immediate teardown with `INCOMPATIBLE_DESTINATION`.
+
+### Verify
+```bash
+# Confirm param exists in running container
+kubectl -n dialerv2test exec deploy/dialer-freeswitch -c freeswitch -- \
+  sh -lc "grep -n 'apply-candidate-acl\\|local-network-acl' /usr/local/freeswitch/conf/sip_profiles/internal.xml"
+
+# Confirm call no longer fails with candidate-ACL warning / incompatible destination
+kubectl -n dialerv2test logs deploy/dialer-freeswitch -c freeswitch --since=10m | \
+  grep -E "NO candidate ACL defined|INCOMPATIBLE_DESTINATION|Hangup sofia/internal/1001"
+```
+
+---
+
+## Step 11 — End-to-end production validation (latest)
+
+### Command used
+```bash
+kubectl -n dialerv2test exec deploy/dialer-freeswitch -c freeswitch -- \
+fs_cli -H 127.0.0.1 -P 8021 -p 'FS!Secure2026' -x \
+"originate {originate_timeout=30,ignore_early_media=true,origination_caller_id_number=923001112233}loopback/1234567890/public &park"
+```
+
+### Validation outcome
+- Ring reached portal agent (`Ring-Ready`).
+- Agent leg answered and bridge resolved successfully.
+- Call remained connected well beyond 5 seconds (observed >30s), then cleared with `NORMAL_CLEARING`.
 
 ---
 
@@ -240,7 +309,10 @@ Use this JSON (RabbitMQ message or test API payload):
 ```bash
 # Rebuild/redeploy your updated images/workloads
 kubectl apply -f dialer-aio/deployment/fs-configmap.yaml
+kubectl apply -f dialer-aio/deployment/fs-entrypoint.yaml
 kubectl apply -f dialer-aio/deployment/deployment.yaml
+kubectl -n dialerv2test rollout restart deployment/dialer-freeswitch
+kubectl -n dialerv2test rollout status deployment/dialer-freeswitch --timeout=240s
 
 # Inside FS
 fs_cli -x "reloadxml"
@@ -254,4 +326,3 @@ fs_cli -x "sofia status profile internal reg"
 
 - `AGENT_COOLDOWN_SEC` is intentionally low for testing.  
   For production behavior, set to `30-60` seconds.
-
